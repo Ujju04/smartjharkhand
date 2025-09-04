@@ -318,13 +318,33 @@ class AdminDashboardTester:
         logger.info("3. Testing file upload for proof submission")
         # Create a mock file for testing
         mock_file_content = b"Mock image content for testing"
-        files = {
-            'files': [
-                ('test_proof.jpg', mock_file_content, 'image/jpeg')
-            ]
-        }
         
-        response = await self.make_request('POST', '/upload/proof', files=files, headers=headers)
+        # Create proper multipart form data
+        form_data = aiohttp.FormData()
+        form_data.add_field('files', mock_file_content, filename='test_proof.jpg', content_type='image/jpeg')
+        
+        try:
+            url = f"{API_BASE_URL}/upload/proof"
+            async with self.session.post(url, data=form_data, headers=headers) as response:
+                response_text = await response.text()
+                try:
+                    response_data = json.loads(response_text)
+                except json.JSONDecodeError:
+                    response_data = {"raw_response": response_text}
+                
+                upload_response = {
+                    'status': response.status,
+                    'data': response_data,
+                    'headers': dict(response.headers)
+                }
+        except Exception as e:
+            upload_response = {
+                'status': 0,
+                'data': {'error': str(e)},
+                'headers': {}
+            }
+        
+        response = upload_response
         
         if response['status'] == 200 and response['data'].get('success'):
             uploaded_files = response['data']['data'].get('files', [])
