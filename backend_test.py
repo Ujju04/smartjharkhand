@@ -483,13 +483,31 @@ class AdminDashboardTester:
         if self.lower_admin_token:
             headers = {'Authorization': f'Bearer {self.lower_admin_token}'}
             # Try to upload invalid file type
-            files = {
-                'files': [
-                    ('test.txt', b"Invalid file content", 'text/plain')
-                ]
-            }
+            form_data = aiohttp.FormData()
+            form_data.add_field('files', b"Invalid file content", filename='test.txt', content_type='text/plain')
             
-            response = await self.make_request('POST', '/upload/proof', files=files, headers=headers)
+            try:
+                url = f"{API_BASE_URL}/upload/proof"
+                async with self.session.post(url, data=form_data, headers=headers) as response:
+                    response_text = await response.text()
+                    try:
+                        response_data = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        response_data = {"raw_response": response_text}
+                    
+                    upload_response = {
+                        'status': response.status,
+                        'data': response_data,
+                        'headers': dict(response.headers)
+                    }
+            except Exception as e:
+                upload_response = {
+                    'status': 0,
+                    'data': {'error': str(e)},
+                    'headers': {}
+                }
+            
+            response = upload_response
             
             if response['status'] == 400:
                 self.test_results['error_handling']['invalid_file_upload'] = 'PASS'
