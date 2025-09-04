@@ -6,7 +6,7 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
 import { Shield, User, Lock } from 'lucide-react';
-import { mockAuth } from '../data/mockData';
+import { authAPI } from '../services/api';
 
 const Login = ({ onLogin }) => {
   const [formData, setFormData] = useState({
@@ -22,38 +22,23 @@ const Login = ({ onLogin }) => {
     setLoading(true);
     setError('');
 
-    // Simulate API call delay
-    setTimeout(() => {
-      let user = null;
-
-      if (formData.role === 'Main Admin') {
-        if (formData.username === mockAuth.mainAdmin.username && 
-            formData.password === mockAuth.mainAdmin.password) {
-          user = {
-            ...mockAuth.mainAdmin,
-            token: 'mock-jwt-token-main-admin'
-          };
-        }
-      } else if (formData.role === 'Lower Admin') {
-        const worker = mockAuth.workers.find(w => 
-          w.username === formData.username && w.password === formData.password
-        );
-        if (worker) {
-          user = {
-            ...worker,
-            token: `mock-jwt-token-${worker.id}`
-          };
-        }
-      }
-
-      if (user) {
-        localStorage.setItem('adminUser', JSON.stringify(user));
-        onLogin(user);
-      } else {
-        setError('Invalid credentials. Please check your username and password.');
-      }
+    try {
+      const response = await authAPI.login(formData.username, formData.password, formData.role);
+      
+      // Store user data with token
+      const userData = {
+        ...response.user,
+        token: response.token
+      };
+      
+      localStorage.setItem('adminUser', JSON.stringify(userData));
+      onLogin(userData);
+      
+    } catch (error) {
+      setError(error.message || 'Login failed. Please try again.');
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
 
   const handleDemoLogin = (role) => {
@@ -143,7 +128,7 @@ const Login = ({ onLogin }) => {
             <Button 
               type="submit" 
               className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-medium"
-              disabled={loading}
+              disabled={loading || !formData.role}
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </Button>

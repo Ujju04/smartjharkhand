@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Textarea } from './ui/textarea';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { useToast } from '../hooks/use-toast';
 import { 
   Bell, 
   CheckCircle, 
@@ -20,48 +21,84 @@ import {
   User,
   AlertCircle,
   Camera,
-  MessageSquare
+  MessageSquare,
+  RefreshCw
 } from 'lucide-react';
-import { mockComplaints } from '../data/mockData';
+import { complaintsAPI, uploadAPI } from '../services/api';
 
 const LowerAdminDashboard = ({ user, onLogout }) => {
   const [complaints, setComplaints] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [selectedComplaint, setSelectedComplaint] = useState(null);
   const [updateDialog, setUpdateDialog] = useState(false);
   const [proofFiles, setProofFiles] = useState([]);
   const [statusUpdate, setStatusUpdate] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const { toast } = useToast();
 
-  // Filter complaints assigned to this worker
+  // Load complaints assigned to this worker
   useEffect(() => {
-    const assignedComplaints = mockComplaints.filter(complaint => 
-      complaint.assignedTo === user.id
-    );
-    setComplaints(assignedComplaints);
-  }, [user.id]);
+    loadComplaints();
+  }, []);
 
-  const handleStatusUpdate = (complaintId, newStatus, newRemarks, proofFiles) => {
-    setComplaints(complaints.map(complaint =>
-      complaint.id === complaintId
-        ? { 
-            ...complaint, 
-            status: newStatus, 
-            remarks: newRemarks,
-            proofImages: [...complaint.proofImages, ...proofFiles.map(f => f.name)],
-            updatedAt: new Date().toISOString()
-          }
-        : complaint
-    ));
-    setUpdateDialog(false);
-    setProofFiles([]);
-    setRemarks('');
-    setStatusUpdate('');
+  const loadComplaints = async () => {
+    setLoading(true);
+    try {
+      const response = await complaintsAPI.getComplaints();
+      setComplaints(response.complaints || []);
+    } catch (error) {
+      console.error('Error loading complaints:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load complaints. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    // Simulate browser notification
-    if (Notification.permission === 'granted') {
-      new Notification('Status Updated', {
-        body: `Complaint ${complaintId} status updated to ${newStatus}`,
-        icon: '/favicon.ico'
+  const handleStatusUpdate = async (complaintId, newStatus, newRemarks, uploadedFiles = []) => {
+    try {
+      await complaintsAPI.updateComplaintStatus(complaintId, newStatus, newRemarks, uploadedFiles);
+      
+      // Update local state
+      setComplaints(complaints.map(complaint =>
+        complaint.id === complaintId
+          ? { 
+              ...complaint, 
+              status: newStatus, 
+              remarks: newRemarks,
+              proofImages: [...complaint.proofImages, ...uploadedFiles],
+              updatedAt: new Date().toISOString()
+            }
+          : complaint
+      ));
+      
+      setUpdateDialog(false);
+      setProofFiles([]);
+      setRemarks('');
+      setStatusUpdate('');
+
+      toast({
+        title: "Success",
+        description: `Complaint ${complaintId} status updated to ${newStatus}`,
+      });
+
+      // Show browser notification
+      if (Notification.permission === 'granted') {
+        new Notification('Status Updated', {
+          body: `Complaint ${complaintId} status updated to ${newStatus}`,
+          icon: '/favicon.ico'
+        });
+      }
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update complaint status.",
+        variant: "destructive"
       });
     }
   };
@@ -73,6 +110,40 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
 
   const removeFile = (index) => {
     setProofFiles(proofFiles.filter((_, i) => i !== index));
+  };
+
+  const handleCompleteUpdate = async () => {
+    if (!statusUpdate) {
+      toast({
+        title: "Error",
+        description: "Please select a status.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setUploading(true);
+    let uploadedFiles = [];
+
+    try {
+      // Upload files if any
+      if (proofFiles.length > 0) {
+        const uploadResponse = await uploadAPI.uploadProofFiles(proofFiles);
+        uploadedFiles = uploadResponse.files || [];
+      }
+
+      // Update complaint status
+      await handleStatusUpdate(selectedComplaint.id, statusUpdate, remarks, uploadedFiles);
+    } catch (error) {
+      console.error('Error in complete update:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to complete update.",
+        variant: "destructive"
+      });
+    } finally {
+      setUploading(false);
+    }
   };
 
   const getStatusColor = (status) => {
@@ -110,6 +181,17 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
     }
   }, []);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="animate-spin h-8 w-8 text-blue-600 mx-auto mb-4" />
+          <p className="text-slate-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -128,8 +210,12 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
           <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2 text-sm text-slate-600">
               <Bell className="w-4 h-4" />
-              <span>{complaints.filter(c => c.status === 'Pending').length} new</span>
+              <span>{complaints.filter(c => c.status === 'In Progress').length} active</span>
             </div>
+            <Button variant="outline" size="sm" onClick={loadComplaints}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
             <Button variant="outline" size="sm">
               <Settings className="w-4 h-4 mr-2" />
               Settings
@@ -276,7 +362,12 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
                         <Dialog open={updateDialog && selectedComplaint?.id === complaint.id}
                                onOpenChange={(open) => {
                                  setUpdateDialog(open);
-                                 if (open) setSelectedComplaint(complaint);
+                                 if (open) {
+                                   setSelectedComplaint(complaint);
+                                   setStatusUpdate('');
+                                   setRemarks('');
+                                   setProofFiles([]);
+                                 }
                                }}>
                           <DialogTrigger asChild>
                             <Button>
@@ -370,10 +461,10 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
                                   Cancel
                                 </Button>
                                 <Button 
-                                  onClick={() => handleStatusUpdate(complaint.id, statusUpdate, remarks, proofFiles)}
-                                  disabled={!statusUpdate}
+                                  onClick={handleCompleteUpdate}
+                                  disabled={!statusUpdate || uploading}
                                 >
-                                  Update Status
+                                  {uploading ? 'Updating...' : 'Update Status'}
                                 </Button>
                               </div>
                             </div>
@@ -431,7 +522,7 @@ const LowerAdminDashboard = ({ user, onLogout }) => {
                     <div className="space-y-3">
                       <div className="flex justify-between">
                         <span className="text-slate-600">Total Completed</span>
-                        <span className="font-medium">{user.completedComplaints || 15}</span>
+                        <span className="font-medium">{user.completedComplaints || 0}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-600">Department</span>

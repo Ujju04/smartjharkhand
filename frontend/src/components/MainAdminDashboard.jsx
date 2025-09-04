@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
+import { useToast } from '../hooks/use-toast';
 import { 
   Search, 
   Filter, 
@@ -24,14 +25,17 @@ import {
   ArrowRight,
   Phone,
   Mail,
-  Calendar
+  Calendar,
+  RefreshCw
 } from 'lucide-react';
-import { mockComplaints, mockUsers, mockWorkers, mockDepartments, mockAnalytics } from '../data/mockData';
+import { complaintsAPI, usersAPI, adminAPI, DEPARTMENTS } from '../services/api';
 
 const MainAdminDashboard = ({ user, onLogout }) => {
-  const [complaints, setComplaints] = useState(mockComplaints);
-  const [users, setUsers] = useState(mockUsers);
-  const [workers, setWorkers] = useState(mockWorkers);
+  const [complaints, setComplaints] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterDepartment, setFilterDepartment] = useState('all');
@@ -40,6 +44,50 @@ const MainAdminDashboard = ({ user, onLogout }) => {
   const [transferDialog, setTransferDialog] = useState(false);
   const [userSearchDialog, setUserSearchDialog] = useState(false);
   const [userSearchTerm, setUserSearchTerm] = useState('');
+  const { toast } = useToast();
+
+  // Load initial data
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
+  const loadDashboardData = async () => {
+    setLoading(true);
+    try {
+      const [complaintsData, analyticsData, workersData] = await Promise.all([
+        complaintsAPI.getComplaints(),
+        complaintsAPI.getAnalytics(),
+        adminAPI.getWorkers()
+      ]);
+
+      setComplaints(complaintsData.complaints || []);
+      setAnalytics(analyticsData);
+      setWorkers(workersData || []);
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load dashboard data. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadUsers = async (search = '') => {
+    try {
+      const userData = await usersAPI.getUsers(search);
+      setUsers(userData || []);
+    } catch (error) {
+      console.error('Error loading users:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load users.",
+        variant: "destructive"
+      });
+    }
+  };
 
   // Filter complaints based on search and filters
   const filteredComplaints = complaints.filter(complaint => {
@@ -60,30 +108,65 @@ const MainAdminDashboard = ({ user, onLogout }) => {
     user.id.toLowerCase().includes(userSearchTerm.toLowerCase())
   );
 
-  const handleAssignComplaint = (complaintId, workerId) => {
-    const worker = workers.find(w => w.id === workerId);
-    setComplaints(complaints.map(complaint => 
-      complaint.id === complaintId 
-        ? { ...complaint, assignedTo: workerId, assignedWorker: worker.name, status: 'In Progress' }
-        : complaint
-    ));
-    setAssignDialog(false);
-    // Simulate browser notification
-    if (Notification.permission === 'granted') {
-      new Notification('Complaint Assigned', {
-        body: `Complaint ${complaintId} has been assigned to ${worker.name}`,
-        icon: '/favicon.ico'
+  const handleAssignComplaint = async (complaintId, workerId) => {
+    try {
+      const worker = workers.find(w => w.id === workerId);
+      await complaintsAPI.assignComplaint(complaintId, workerId, worker.name);
+      
+      // Update local state
+      setComplaints(complaints.map(complaint => 
+        complaint.id === complaintId 
+          ? { ...complaint, assignedTo: workerId, assignedWorker: worker.name, status: 'In Progress' }
+          : complaint
+      ));
+      
+      setAssignDialog(false);
+      toast({
+        title: "Success",
+        description: `Complaint ${complaintId} assigned to ${worker.name}`,
+      });
+
+      // Show browser notification
+      if (Notification.permission === 'granted') {
+        new Notification('Complaint Assigned', {
+          body: `Complaint ${complaintId} has been assigned to ${worker.name}`,
+          icon: '/favicon.ico'
+        });
+      }
+    } catch (error) {
+      console.error('Error assigning complaint:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to assign complaint.",
+        variant: "destructive"
       });
     }
   };
 
-  const handleTransferComplaint = (complaintId, newDepartment) => {
-    setComplaints(complaints.map(complaint =>
-      complaint.id === complaintId
-        ? { ...complaint, department: newDepartment, assignedTo: null, assignedWorker: null, status: 'Pending' }
-        : complaint
-    ));
-    setTransferDialog(false);
+  const handleTransferComplaint = async (complaintId, newDepartment) => {
+    try {
+      await complaintsAPI.transferComplaint(complaintId, newDepartment);
+      
+      // Update local state
+      setComplaints(complaints.map(complaint =>
+        complaint.id === complaintId
+          ? { ...complaint, department: newDepartment, assignedTo: null, assignedWorker: null, status: 'Pending' }
+          : complaint
+      ));
+      
+      setTransferDialog(false);
+      toast({
+        title: "Success",
+        description: `Complaint ${complaintId} transferred to ${newDepartment}`,
+      });
+    } catch (error) {
+      console.error('Error transferring complaint:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to transfer complaint.",
+        variant: "destructive"
+      });
+    }
   };
 
   const getPriorityColor = (priority) => {
@@ -111,6 +194,17 @@ const MainAdminDashboard = ({ user, onLogout }) => {
     }
   }, []);
 
+  if (loading && !analytics) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="animate-spin h-8 w-8 text-blue-600 mx-auto mb-4" />
+          <p className="text-slate-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -126,6 +220,10 @@ const MainAdminDashboard = ({ user, onLogout }) => {
             </div>
           </div>
           <div className="flex items-center space-x-4">
+            <Button variant="outline" size="sm" onClick={loadDashboardData}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
             <Button variant="outline" size="sm">
               <Settings className="w-4 h-4 mr-2" />
               Settings
@@ -150,70 +248,74 @@ const MainAdminDashboard = ({ user, onLogout }) => {
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6">
             {/* Analytics Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <Card className="border-l-4 border-l-blue-500">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-600">Total Complaints</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-slate-800">{mockAnalytics.totalComplaints}</div>
-                  <p className="text-xs text-slate-600">All time</p>
-                </CardContent>
-              </Card>
+            {analytics && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <Card className="border-l-4 border-l-blue-500">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-600">Total Complaints</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-slate-800">{analytics.totalComplaints}</div>
+                    <p className="text-xs text-slate-600">All time</p>
+                  </CardContent>
+                </Card>
 
-              <Card className="border-l-4 border-l-orange-500">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-600">Pending</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-orange-600">{mockAnalytics.pendingComplaints}</div>
-                  <p className="text-xs text-slate-600">Needs assignment</p>
-                </CardContent>
-              </Card>
+                <Card className="border-l-4 border-l-orange-500">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-600">Pending</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-orange-600">{analytics.pendingComplaints}</div>
+                    <p className="text-xs text-slate-600">Needs assignment</p>
+                  </CardContent>
+                </Card>
 
-              <Card className="border-l-4 border-l-blue-500">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-600">In Progress</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-blue-600">{mockAnalytics.inProgressComplaints}</div>
-                  <p className="text-xs text-slate-600">Being worked on</p>
-                </CardContent>
-              </Card>
+                <Card className="border-l-4 border-l-blue-500">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-600">In Progress</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-blue-600">{analytics.inProgressComplaints}</div>
+                    <p className="text-xs text-slate-600">Being worked on</p>
+                  </CardContent>
+                </Card>
 
-              <Card className="border-l-4 border-l-green-500">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-slate-600">Completed</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold text-green-600">{mockAnalytics.completedComplaints}</div>
-                  <p className="text-xs text-slate-600">Resolved</p>
-                </CardContent>
-              </Card>
-            </div>
+                <Card className="border-l-4 border-l-green-500">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-medium text-slate-600">Completed</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-green-600">{analytics.completedComplaints}</div>
+                    <p className="text-xs text-slate-600">Resolved</p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
 
             {/* Department Statistics */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Department Performance</CardTitle>
-                <CardDescription>Complaint breakdown by department</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {mockAnalytics.departmentStats.map((dept, index) => (
-                    <div key={index} className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
-                      <div className="font-medium text-slate-800">{dept.department}</div>
-                      <div className="flex items-center space-x-6 text-sm">
-                        <span className="text-slate-600">Total: {dept.total}</span>
-                        <span className="text-green-600">Completed: {dept.completed}</span>
-                        <span className="text-blue-600">In Progress: {dept.inProgress}</span>
-                        <span className="text-orange-600">Pending: {dept.pending}</span>
+            {analytics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Department Performance</CardTitle>
+                  <CardDescription>Complaint breakdown by department</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {analytics.departmentStats.map((dept, index) => (
+                      <div key={index} className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
+                        <div className="font-medium text-slate-800">{dept.department}</div>
+                        <div className="flex items-center space-x-6 text-sm">
+                          <span className="text-slate-600">Total: {dept.total}</span>
+                          <span className="text-green-600">Completed: {dept.completed}</span>
+                          <span className="text-blue-600">In Progress: {dept.inProgress}</span>
+                          <span className="text-orange-600">Pending: {dept.pending}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
           {/* Complaints Tab */}
@@ -227,7 +329,7 @@ const MainAdminDashboard = ({ user, onLogout }) => {
                   </div>
                   <Dialog open={userSearchDialog} onOpenChange={setUserSearchDialog}>
                     <DialogTrigger asChild>
-                      <Button>
+                      <Button onClick={() => loadUsers()}>
                         <Search className="w-4 h-4 mr-2" />
                         Search Users
                       </Button>
@@ -241,7 +343,10 @@ const MainAdminDashboard = ({ user, onLogout }) => {
                         <Input
                           placeholder="Search users..."
                           value={userSearchTerm}
-                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          onChange={(e) => {
+                            setUserSearchTerm(e.target.value);
+                            loadUsers(e.target.value);
+                          }}
                         />
                         <div className="max-h-96 overflow-y-auto">
                           <Table>
@@ -314,7 +419,7 @@ const MainAdminDashboard = ({ user, onLogout }) => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Departments</SelectItem>
-                      {mockDepartments.map(dept => (
+                      {DEPARTMENTS.map(dept => (
                         <SelectItem key={dept} value={dept}>{dept}</SelectItem>
                       ))}
                     </SelectContent>
@@ -419,7 +524,7 @@ const MainAdminDashboard = ({ user, onLogout }) => {
                                           <SelectValue placeholder="Choose department" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          {mockDepartments.filter(dept => dept !== complaint.department).map(dept => (
+                                          {DEPARTMENTS.filter(dept => dept !== complaint.department).map(dept => (
                                             <SelectItem key={dept} value={dept}>{dept}</SelectItem>
                                           ))}
                                         </SelectContent>
@@ -447,55 +552,61 @@ const MainAdminDashboard = ({ user, onLogout }) => {
                 <CardDescription>Complete user information and complaint history</CardDescription>
               </CardHeader>
               <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>User Info</TableHead>
-                      <TableHead>Contact Details</TableHead>
-                      <TableHead>Complaint Statistics</TableHead>
-                      <TableHead>Member Since</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {users.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">{user.name}</div>
-                            <div className="text-sm text-slate-600 font-mono">{user.id}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <div className="flex items-center text-sm">
-                              <Mail className="w-3 h-3 mr-2 text-slate-400" />
-                              {user.email}
-                            </div>
-                            <div className="flex items-center text-sm">
-                              <Phone className="w-3 h-3 mr-2 text-slate-400" />
-                              {user.phone}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="space-y-1">
-                            <div className="text-sm">Total: {user.totalComplaints}</div>
-                            <div className="text-sm text-green-600">Resolved: {user.resolvedComplaints}</div>
-                            <div className="text-sm text-orange-600">
-                              Pending: {user.totalComplaints - user.resolvedComplaints}
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center text-sm text-slate-600">
-                            <Calendar className="w-3 h-3 mr-2" />
-                            {new Date(user.joinedDate).toLocaleDateString()}
-                          </div>
-                        </TableCell>
+                {users.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Button onClick={() => loadUsers()}>Load Users</Button>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>User Info</TableHead>
+                        <TableHead>Contact Details</TableHead>
+                        <TableHead>Complaint Statistics</TableHead>
+                        <TableHead>Member Since</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {users.map((user) => (
+                        <TableRow key={user.id}>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium">{user.name}</div>
+                              <div className="text-sm text-slate-600 font-mono">{user.id}</div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="flex items-center text-sm">
+                                <Mail className="w-3 h-3 mr-2 text-slate-400" />
+                                {user.email}
+                              </div>
+                              <div className="flex items-center text-sm">
+                                <Phone className="w-3 h-3 mr-2 text-slate-400" />
+                                {user.phone}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="text-sm">Total: {user.totalComplaints}</div>
+                              <div className="text-sm text-green-600">Resolved: {user.resolvedComplaints}</div>
+                              <div className="text-sm text-orange-600">
+                                Pending: {user.totalComplaints - user.resolvedComplaints}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center text-sm text-slate-600">
+                              <Calendar className="w-3 h-3 mr-2" />
+                              {new Date(user.joinedDate).toLocaleDateString()}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
